@@ -605,6 +605,13 @@ def compile_fx_aot(
 
 _graph_counter = itertools.count(0)
 
+def view_to_reshape(gm):
+    """
+    Needed for timm_resnest
+    """
+    for nd in gm.graph.nodes:
+        if nd.target == torch.ops.aten.view.default:
+            nd.target = torch.ops.aten.reshape.default
 
 def compile_fx(
     model_: torch.fx.GraphModule,
@@ -614,6 +621,19 @@ def compile_fx(
     decompositions: Optional[Dict[OpOverload, Callable]] = None,
 ):
     """Main entrypoint to a compile given FX graph"""
+
+    # InstanceNorm is too slow with channels last. Disable layout-optimization for
+    # convolution which needs channels last inputs.
+    #
+    # Revisit since https://github.com/pytorch/pytorch/pull/99528 may have improve
+    # the perf.
+    # 
+    # Following models are skipped due to this:
+    # - pytorch_CycleGAN_and_pix2pix
+    if any(isinstance(x, torch.nn.modules.instancenorm.InstanceNorm2d) for x in model_.modules()):
+        print("DIABLE LAYOUT_OPT BECAUSE INSTANCE_NORM")
+        config.layout_opt = False
+
     if config_patches:
         with config.patch(config_patches):
             return compile_fx(
@@ -681,6 +701,11 @@ def compile_fx(
             joint_graph_passes(model)
 
         fixed = len(example_inputs) - num_example_inputs
+        if config.layout_opt:
+            view_to_reshape(model)
+            with open("/tmp/fwd.fx", "w") as f:
+                f.write(model.print_readable(False))
+
         return inner_compile(
             model,
             example_inputs,
@@ -707,6 +732,10 @@ def compile_fx(
 
     @dynamo_utils.dynamo_timed
     def bw_compiler(model: torch.fx.GraphModule, example_inputs):
+        if config.layout_opt:
+            view_to_reshape(model)
+            with open("/tmp/bwd.fx", "w") as f:
+                f.write(model.print_readable(False))
         with dynamo_config.patch(dynamic_shapes=dynamic_shapes):
             fixed = count_tangents(model)
             return inner_compile(
@@ -722,6 +751,7 @@ def compile_fx(
     with overrides.patch_functions():
         if decompositions is None:
             decompositions = select_decomp_table()
+
         # TODO: can add logging before/after the call to create_aot_dispatcher_function
         # in torch._functorch/aot_autograd.py::aot_module_simplified::aot_function_simplified::new_func
         # once torchdynamo is merged into pytorch
