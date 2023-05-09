@@ -7307,13 +7307,12 @@ class TestNLLLoss(TestCaseMPS):
     # like this example:
     # "aten::mps_convolution_backward_input:f32[1,128,6,6]:f32[128,64,3,3]:1,128,6,6 (id=G2, run=2)"
     def test_mps_profiler_module(self):
-        torch.mps.profiler.start(mode="event", wait_until_completed=False)
-        # just running some ops to capture the OS Signposts traces for profiling
-        net1 = torch.nn.ConvTranspose2d(128, 64, kernel_size=3, stride=2, padding=1, output_padding=1)\
-            .to(device='mps', dtype=torch.float)
-        x = torch.rand(1, 128, 6, 6, device='mps', dtype=torch.float, requires_grad=True)
-        x = net1(x)
-        torch.mps.profiler.stop()
+        with torch.mps.profiler.profile(mode="event", wait_until_completed=False) as p:
+            # just running some ops to capture the OS Signposts traces for profiling
+            net1 = torch.nn.ConvTranspose2d(128, 64, kernel_size=3, stride=2, padding=1, output_padding=1)\
+                .to(device='mps', dtype=torch.float)
+            x = torch.rand(1, 128, 6, 6, device='mps', dtype=torch.float, requires_grad=True)
+            x = net1(x)
 
         torch.mps.profiler.start(mode="interval", wait_until_completed=True)
         # just running some ops to capture the OS Signposts traces for profiling
